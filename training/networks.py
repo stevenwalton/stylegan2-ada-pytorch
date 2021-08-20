@@ -39,9 +39,9 @@ def modulated_conv2d(
 ):
     batch_size = x.shape[0]
     out_channels, in_channels, kh, kw = weight.shape
-    misc.assert_shape(weight, [out_channels, in_channels, kh, kw]) # [OIkk]
-    misc.assert_shape(x, [batch_size, in_channels, None, None]) # [NIHW]
-    misc.assert_shape(styles, [batch_size, in_channels]) # [NI]
+    #misc.assert_shape(weight, [out_channels, in_channels, kh, kw]) # [OIkk]
+    #misc.assert_shape(x, [batch_size, in_channels, None, None]) # [NIHW]
+    #misc.assert_shape(styles, [batch_size, in_channels]) # [NI]
 
     # Pre-normalize inputs to avoid FP16 overflow.
     if x.dtype == torch.float16 and demodulate:
@@ -74,7 +74,7 @@ def modulated_conv2d(
     # Execute as one fused op using grouped convolution.
     with misc.suppress_tracer_warnings(): # this value will be treated as a constant
         batch_size = int(batch_size)
-    misc.assert_shape(x, [batch_size, in_channels, None, None])
+    #misc.assert_shape(x, [batch_size, in_channels, None, None])
     x = x.reshape(1, -1, *x.shape[2:])
     w = w.reshape(-1, in_channels, kh, kw)
     x = conv2d_resample.conv2d_resample(x=x, w=w.to(x.dtype), f=resample_filter, up=up, down=down, padding=padding, groups=batch_size, flip_weight=flip_weight)
@@ -216,11 +216,10 @@ class MappingNetwork(torch.nn.Module):
         x = None
         with torch.autograd.profiler.record_function('input'):
             if self.z_dim > 0:
-                print(f"Into mapping with z {z.shape} and zdim {self.z_dim}")
-                misc.assert_shape(z, [None, self.z_dim])
+                #misc.assert_shape(z, [None, self.z_dim])
                 x = normalize_2nd_moment(z.to(torch.float32))
             if self.c_dim > 0:
-                misc.assert_shape(c, [None, self.c_dim])
+                #misc.assert_shape(c, [None, self.c_dim])
                 y = normalize_2nd_moment(self.embed(c.to(torch.float32)))
                 x = torch.cat([x, y], dim=1) if x is not None else y
 
@@ -288,7 +287,7 @@ class SynthesisLayer(torch.nn.Module):
     def forward(self, x, w, noise_mode='random', fused_modconv=True, gain=1):
         assert noise_mode in ['random', 'const', 'none']
         in_resolution = self.resolution // self.up
-        misc.assert_shape(x, [None, self.weight.shape[1], in_resolution, in_resolution * 4])
+        #misc.assert_shape(x, [None, self.weight.shape[1], in_resolution, in_resolution * 4])
         assert(w is not None),f"That w is none and we're in trouble!"
         styles = self.affine(w)
 
@@ -356,6 +355,7 @@ class SynthesisBlock(torch.nn.Module):
         w_dim,                              # Intermediate latent (W) dimensionality.
         resolution,                         # Resolution of this block.
         img_channels,                       # Number of output color channels.
+        nimgs,                              # Number of images to make
         is_last,                            # Is this the last block?
         is_first=False,
         architecture        = 'skip',       # Architecture: 'orig', 'skip', 'resnet'.
@@ -380,7 +380,8 @@ class SynthesisBlock(torch.nn.Module):
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
         self.num_conv = 0
         self.num_torgb = 0
-        self.num_mask = 0
+        self.num_mask = 0 # Number of mask layers!
+        self.nimgs = nimgs # Number of images to make
         # TODO: Make this work. Fails at last version for some reason
         self.use_fp16 = False
 
@@ -406,7 +407,7 @@ class SynthesisBlock(torch.nn.Module):
         # RGBConv
         if is_last or architecture == 'skip':
             #self.torgb = ToRGBLayer(out_channels, img_channels, w_dim=w_dim,
-            self.torgb = ToRGBLayer(out_channels, 3, w_dim=w_dim,
+            self.torgb = ToRGBLayer(out_channels, img_channels * nimgs, w_dim=w_dim,
                 conv_clamp=conv_clamp, channels_last=self.channels_last)
             self.num_torgb += 1
 
@@ -416,15 +417,15 @@ class SynthesisBlock(torch.nn.Module):
                 resample_filter=resample_filter, channels_last=self.channels_last)
             
         if self.is_first:
-            self.mask = MaskLayer(img_channels, 1, w_dim=w_dim, conv_clamp=conv_clamp, channels_last=self.channels_last)
+            self.mask = MaskLayer(img_channels * nimgs, nimgs, w_dim=w_dim, conv_clamp=conv_clamp, channels_last=self.channels_last)
         else:
-            self.mask = MaskLayer(img_channels+1, 1, w_dim=w_dim, conv_clamp=conv_clamp, channels_last=self.channels_last)
+            self.mask = MaskLayer(img_channels * nimgs + nimgs, nimgs, w_dim=w_dim, conv_clamp=conv_clamp, channels_last=self.channels_last)
         if self.is_first:
             self.num_mask += 1
 
 
     def forward(self, x, img, ws, mask=None, mask_w=None, force_fp32=False, fused_modconv=None, **layer_kwargs):
-        misc.assert_shape(ws, [None, self.num_conv + self.num_torgb + self.num_mask, self.w_dim])
+        #misc.assert_shape(ws, [None, self.num_conv + self.num_torgb + self.num_mask, self.w_dim])
         w_iter = iter(ws.unbind(dim=1))
         dtype = torch.float16 if self.use_fp16 and not force_fp32 else torch.float32
         memory_format = torch.channels_last if self.channels_last and not force_fp32 else torch.contiguous_format
@@ -432,8 +433,8 @@ class SynthesisBlock(torch.nn.Module):
             with misc.suppress_tracer_warnings(): # this value will be treated as a constant
                 fused_modconv = (not self.training) and (dtype == torch.float32 or int(x.shape[0]) == 1)
 
-        if not self.is_first:
-            misc.assert_shape(x, [None, self.in_channels, self.resolution // 2, self.resolution * 2])
+        #if not self.is_first:
+        #    #misc.assert_shape(x, [None, self.in_channels, self.resolution // 2, self.resolution * 2])
 
         # Main layers.
         if self.is_first:
@@ -452,7 +453,7 @@ class SynthesisBlock(torch.nn.Module):
             x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
 
         if img is not None and not self.is_first:
-            misc.assert_shape(img, [None, self.img_channels, self.resolution//2, self.resolution * 2])
+            #misc.assert_shape(img, [None, self.img_channels, self.resolution//2, self.resolution * 2])
             img = upfirdn2d.upsample2d(img, self.resample_filter)
             # We need to upscale the mask
             mask = upfirdn2d.upsample2d(mask, self.resample_filter)
@@ -490,6 +491,7 @@ class SynthesisNetwork(torch.nn.Module):
         w_dim,                      # Intermediate latent (W) dimensionality.
         img_resolution,             # Output image resolution.
         img_channels,               # Number of color channels.
+        nimgs           = 1,        # Number of images to make
         channel_base    = 32768,    # Overall multiplier for the number of channels.
         channel_max     = 512,      # Maximum number of channels in any layer.
         num_fp16_res    = 0,        # Use FP16 for the N highest resolutions.
@@ -500,7 +502,7 @@ class SynthesisNetwork(torch.nn.Module):
         self.w_dim = w_dim
         self.img_resolution = img_resolution
         self.img_resolution_log2 = int(np.log2(img_resolution))
-        self.img_channels = img_channels
+        self.img_channels = img_channels * nimgs
         #self.block_resolutions = [2 ** i for i in range(2, self.img_resolution_log2 + 1)]
         # TODO: Make this more programmatic? 
         self.block_resolutions = [2 ** i for i in range(2, self.img_resolution_log2 - 1)]
@@ -516,7 +518,7 @@ class SynthesisNetwork(torch.nn.Module):
             use_fp16 = (res >= fp16_resolution)
             is_last = (res == self.img_resolution)
             block = SynthesisBlock(in_channels, out_channels, w_dim=w_dim, resolution=res,
-                img_channels=img_channels, is_last=is_last, is_first=(i==0), use_fp16=use_fp16, **block_kwargs)
+                img_channels=img_channels, nimgs=nimgs, is_last=is_last, is_first=(i==0), use_fp16=use_fp16, **block_kwargs)
             self.num_ws += block.num_conv
             #if is_last:
             #    self.num_ws += block.num_torgb
@@ -528,7 +530,7 @@ class SynthesisNetwork(torch.nn.Module):
     def forward(self, x, ws, **block_kwargs):
         block_ws = []
         with torch.autograd.profiler.record_function('split_ws'):
-            misc.assert_shape(ws, [None, self.num_ws, self.w_dim])
+            #misc.assert_shape(ws, [None, self.num_ws, self.w_dim])
             ws = ws.to(torch.float32)
             w_idx = 0
             for i, res in enumerate(self.block_resolutions):
@@ -636,20 +638,20 @@ class DiscriminatorBlock(torch.nn.Module):
 
         # Input.
         if x is not None:
-            misc.assert_shape(x, [None, self.in_channels, self.resolution, self.resolution * 4])
+            #misc.assert_shape(x, [None, self.in_channels, self.resolution, self.resolution * 4])
             x = x.to(dtype=dtype, memory_format=memory_format)
 
         # FromRGB.
         #if self.in_channels == 0 or self.architecture == 'skip':
         if self.is_first or self.architecture == 'skip':
-            misc.assert_shape(img, [None, self.img_channels, self.resolution, self.resolution * 4])
+            #print(f"Got img {img.shape} but expecting [{self.img_channels}, {self.resolution}, {self.resolution * 4}]")
+            #misc.assert_shape(img, [None, self.img_channels, self.resolution, self.resolution * 4])
             img = img.to(dtype=dtype, memory_format=memory_format)
             y = self.fromrgb(img)
             x = x + y if x is not None else y
             img = upfirdn2d.downsample2d(img, self.resample_filter) if self.architecture == 'skip' else None
 
         # Main layers.
-        print(f"Going into main layers")
         if self.architecture == 'resnet':
             y = self.skip(x, gain=np.sqrt(0.5))
             x = self.conv0(x)
@@ -719,7 +721,7 @@ class DiscriminatorEpilogue(torch.nn.Module):
         self.out = FullyConnectedLayer(in_channels, 1 if cmap_dim == 0 else cmap_dim)
 
     def forward(self, x, img, cmap, force_fp32=False):
-        misc.assert_shape(x, [None, self.in_channels, self.resolution, self.resolution * 4]) # [NCHW]
+        #misc.assert_shape(x, [None, self.in_channels, self.resolution, self.resolution * 4]) # [NCHW]
         _ = force_fp32 # unused
         dtype = torch.float32
         memory_format = torch.contiguous_format
@@ -727,7 +729,7 @@ class DiscriminatorEpilogue(torch.nn.Module):
         # FromRGB.
         x = x.to(dtype=dtype, memory_format=memory_format)
         if self.architecture == 'skip':
-            misc.assert_shape(img, [None, self.img_channels, self.resolution, self.resolution*4])
+            #misc.assert_shape(img, [None, self.img_channels, self.resolution, self.resolution*4])
             img = img.to(dtype=dtype, memory_format=memory_format)
             x = x + self.fromrgb(img)
 
@@ -740,7 +742,7 @@ class DiscriminatorEpilogue(torch.nn.Module):
 
         # Conditioning.
         if self.cmap_dim > 0:
-            misc.assert_shape(cmap, [None, self.cmap_dim])
+            #misc.assert_shape(cmap, [None, self.cmap_dim])
             x = (x * cmap).sum(dim=1, keepdim=True) * (1 / np.sqrt(self.cmap_dim))
 
         assert x.dtype == dtype
