@@ -533,7 +533,7 @@ class SynthesisNetwork(torch.nn.Module):
             #misc.assert_shape(ws, [None, self.num_ws, self.w_dim])
             ws = ws.to(torch.float32)
             w_idx = 0
-            for i, res in enumerate(self.block_resolutions):
+            for res in self.block_resolutions:
                 block = getattr(self, f'b{res}')
                 block_ws.append(ws.narrow(1, w_idx, block.num_conv + block.num_torgb + block.num_mask))
                 w_idx += block.num_conv + block.num_torgb + block.num_mask
@@ -545,7 +545,7 @@ class SynthesisNetwork(torch.nn.Module):
         for res, cur_ws in zip(self.block_resolutions, block_ws):
             block = getattr(self, f'b{res}')
             x, img, mask, mask_w  = block(x, img, cur_ws, mask, mask_w, **block_kwargs)
-        return img, mask
+        return img#, mask
 
 #----------------------------------------------------------------------------
 
@@ -717,7 +717,8 @@ class DiscriminatorEpilogue(torch.nn.Module):
             self.fromrgb = Conv2dLayer(img_channels, in_channels, kernel_size=1, activation=activation)
         self.mbstd = MinibatchStdLayer(group_size=mbstd_group_size, num_channels=mbstd_num_channels) if mbstd_num_channels > 0 else None
         self.conv = Conv2dLayer(in_channels + mbstd_num_channels, in_channels, kernel_size=3, activation=activation, conv_clamp=conv_clamp)
-        self.fc = FullyConnectedLayer(in_channels * (resolution ** 2), in_channels, activation=activation)
+        #self.fc = FullyConnectedLayer(in_channels * (resolution ** 2), in_channels, activation=activation)
+        self.fc = FullyConnectedLayer(in_channels * (resolution * (resolution *4)), in_channels, activation=activation)
         self.out = FullyConnectedLayer(in_channels, 1 if cmap_dim == 0 else cmap_dim)
 
     def forward(self, x, img, cmap, force_fp32=False):
