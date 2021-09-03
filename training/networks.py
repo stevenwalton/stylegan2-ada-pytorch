@@ -542,10 +542,13 @@ class SynthesisNetwork(torch.nn.Module):
         img = None
         mask = None
         mask_w = None
+        imglist = []
         for res, cur_ws in zip(self.block_resolutions, block_ws):
             block = getattr(self, f'b{res}')
             x, img, mask, mask_w  = block(x, img, cur_ws, mask, mask_w, **block_kwargs)
-        return img#, mask
+            imglist.append(img)
+        #return img, mask
+        return imglist, mask
 
 #----------------------------------------------------------------------------
 
@@ -798,15 +801,21 @@ class Discriminator(torch.nn.Module):
         self.b4 = DiscriminatorEpilogue(channels_dict[4], cmap_dim=cmap_dim, resolution=4, **epilogue_kwargs, **common_kwargs)
 
     def forward(self, img, c, **block_kwargs):
+        assert(torch.is_grad_enabled())
         x = None
         for res in self.block_resolutions:
             block = getattr(self, f'b{res}')
             x, img = block(x, img, **block_kwargs)
+            assert(x.requires_grad),f"x doesn't have grad"
+            if img is not None:
+                assert(img.requires_grad),f"img doesn't have grad"
 
         cmap = None
         if self.c_dim > 0:
             cmap = self.mapping(None, c)
+            assert(cmap.requires_grad),f"cmap doesn't have grad"
         x = self.b4(x, img, cmap)
+        assert(x.requires_grad),f"b4 x doesn't have grad"
         return x
 
 #----------------------------------------------------------------------------
